@@ -386,27 +386,36 @@ app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
       return res.status(500).json({ error: 'Groq API key not configured' });
     }
 
-    // Build multipart form for Groq API
-    const FormData = (await import('undici')).FormData;
+    // Build multipart form for Groq API using form-data + https
+    const FormData = require('form-data');
     const formData = new FormData();
-    const blob = new Blob([req.file.buffer], { type: req.file.mimetype || 'audio/webm' });
-    formData.append('file', blob, req.file.originalname || 'audio.webm');
+    formData.append('file', req.file.buffer, {
+      filename: req.file.originalname || 'audio.webm',
+      contentType: req.file.mimetype || 'audio/webm',
+    });
     formData.append('model', 'whisper-large-v3');
     formData.append('prompt', 'Dream journal entry, recording after waking up');
 
-    const groqRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${GROQ_API_KEY}` },
-      body: formData,
+    const result = await new Promise((resolve, reject) => {
+      formData.submit({
+        host: 'api.groq.com',
+        path: '/openai/v1/audio/transcriptions',
+        protocol: 'https:',
+        headers: { 'Authorization': `Bearer ${GROQ_API_KEY}` },
+      }, (err, groqRes) => {
+        if (err) return reject(err);
+        let body = '';
+        groqRes.on('data', chunk => body += chunk);
+        groqRes.on('end', () => {
+          if (groqRes.statusCode !== 200) {
+            console.error('Groq API error:', groqRes.statusCode, body);
+            return reject(new Error(`Groq API error ${groqRes.statusCode}: ${body}`));
+          }
+          try { resolve(JSON.parse(body)); }
+          catch (e) { reject(new Error('Invalid Groq response')); }
+        });
+      });
     });
-
-    if (!groqRes.ok) {
-      const errText = await groqRes.text();
-      console.error('Groq API error:', groqRes.status, errText);
-      return res.status(502).json({ error: 'Transcription failed', details: errText });
-    }
-
-    const result = await groqRes.json();
     console.log('Transcription complete:', (result.text || '').substring(0, 100) + '...');
     res.json({ success: true, text: result.text || '' });
   } catch (err) {
