@@ -50,18 +50,57 @@ app.post('/api/generate-image', async (req, res) => {
     if (dreamError || !dream) return res.status(404).json({ error: 'Dream not found' });
     if (dream.user_id !== user.id) return res.status(403).json({ error: 'Forbidden' });
 
-    // Build prompt
+    // Use GPT-4o-mini to craft the perfect visual prompt from dream text
     const styleMap = {
-      surrealist: 'surrealist art style, dreamlike, impossible geometry, melting objects, vivid colors',
-      watercolor: 'watercolor painting, soft flowing colors, artistic brushstrokes, ethereal',
-      cinematic: 'cinematic lighting, dramatic composition, film still aesthetic, atmospheric',
-      anime: 'anime art style, vibrant colors, Studio Ghibli inspired, detailed',
-      abstract: 'abstract art, emotional colors, dynamic shapes, cosmic, non-representational',
+      surrealist: 'surrealist art, Salvador Dali meets Remedios Varo, impossible geometry, melting reality, dreamlike distortions, vivid saturated colors',
+      watercolor: 'ethereal watercolor painting, soft bleeding colors, delicate washes, impressionistic, Turner-inspired atmospheric effects',
+      cinematic: 'cinematic still frame, anamorphic lens, volumetric lighting, Blade Runner meets Terrence Malick, dramatic color grading',
+      anime: 'Studio Ghibli inspired, Makoto Shinkai lighting, detailed anime art, luminous skies, emotional atmosphere, vibrant colors',
+      abstract: 'abstract expressionism, Kandinsky meets cosmic nebula, emotional color fields, dynamic shapes, non-representational dreamscape',
     };
     const styleDesc = styleMap[style] || 'dreamlike artistic style';
-    const prompt = `Dream visualization: ${dreamText.substring(0, 500)}. Style: ${styleDesc}. High quality, detailed, atmospheric.`;
 
-    console.log('Generating image for dream:', dreamId, 'style:', style);
+    console.log('Crafting dream prompt with GPT-4o-mini for dream:', dreamId);
+    
+    let prompt;
+    try {
+      const interpretation = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: `You are a dream-to-visual-art translator. Your job is to convert dream journal entries into vivid, specific image generation prompts.
+
+DREAM INTERPRETATION RULES:
+- Focus on the EMOTIONAL TRUTH, not literal accuracy
+- Dreams merge locations, people, and time — embrace the impossibility
+- Identify the 2-3 most visually striking moments and combine them
+- Translate dream feelings into visual metaphors (anxiety = tight spaces, narrow corridors; freedom = vast skies, open water)
+- Use specific sensory details: lighting, texture, color temperature, atmosphere
+- Common dream symbols: flying = transcendence, falling = loss of control, water = emotions, doors = opportunities
+- If people are mentioned, describe them by their emotional role (a protective figure, a threatening shadow) not by name
+- Include composition guidance: foreground/background, perspective, focal point
+
+OUTPUT: Return ONLY the image prompt, no explanation. Keep it under 200 words. Make it painterly and evocative, not clinical.`
+          },
+          {
+            role: 'user',
+            content: `Dream journal entry:\n"${dreamText.substring(0, 800)}"\n\nArt style: ${styleDesc}\n\nCreate a vivid image prompt that captures the essence and emotional core of this dream.`
+          }
+        ],
+        max_tokens: 250,
+        temperature: 0.9,
+      });
+      prompt = interpretation.choices[0]?.message?.content || `Dream visualization: ${dreamText.substring(0, 300)}`;
+    } catch (gptErr) {
+      console.warn('GPT prompt crafting failed, using fallback:', gptErr.message);
+      prompt = `Dream visualization: ${dreamText.substring(0, 500)}. Style: ${styleDesc}. High quality, detailed, atmospheric.`;
+    }
+    
+    // Append style and quality modifiers
+    prompt += `. ${styleDesc}. Masterpiece quality, highly detailed, atmospheric depth.`;
+
+    console.log('Final prompt:', prompt.substring(0, 150) + '...');
 
     const response = await openai.images.generate({
       model: 'dall-e-3',
