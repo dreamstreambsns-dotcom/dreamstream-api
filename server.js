@@ -39,7 +39,7 @@ app.post('/api/generate-image', async (req, res) => {
     if (authError || !data.user) return res.status(401).json({ error: 'Unauthorized' });
     const user = data.user;
 
-    const { dreamId, dreamText, style } = req.body;
+    const { dreamId, dreamText, style, angle, character } = req.body;
     if (!dreamId || !dreamText?.trim() || !style) {
       return res.status(400).json({ error: 'dreamId, dreamText, and style are required' });
     }
@@ -57,6 +57,33 @@ app.post('/api/generate-image', async (req, res) => {
       cinematic: 'cinematic still frame, anamorphic lens, volumetric lighting, Blade Runner meets Terrence Malick, dramatic color grading',
       anime: 'Studio Ghibli inspired, Makoto Shinkai lighting, detailed anime art, luminous skies, emotional atmosphere, vibrant colors',
       abstract: 'abstract expressionism, Kandinsky meets cosmic nebula, emotional color fields, dynamic shapes, non-representational dreamscape',
+      oilPainting: 'classical oil painting, rich impasto texture, Rembrandt lighting, old masters technique, luminous glazes',
+      darkFantasy: 'dark fantasy art, Beksinski inspired, gothic atmosphere, ominous lighting, haunting beauty, eldritch details',
+      psychedelic: 'psychedelic art, Alex Grey meets fractals, vibrant neon colors, sacred geometry, kaleidoscopic patterns, DMT visuals',
+      minimalist: 'minimalist art, clean composition, negative space, subtle color palette, zen-like simplicity, Rothko inspired',
+      photoreal: 'photorealistic, hyperrealism, natural lighting, 8K detail, shallow depth of field, documentary photography',
+      retroFuturism: 'retro futurism, 70s sci-fi book cover, Syd Mead inspired, chrome and neon, analog future aesthetic',
+      stainedGlass: 'stained glass art, luminous backlit colors, lead line borders, cathedral window style, jewel tones, sacred geometry',
+    };
+
+    const angleMap = {
+      auto: '',
+      birdseye: 'bird\'s eye view, looking down from above',
+      wormseye: 'worm\'s eye view, looking up from below, dramatic perspective',
+      closeup: 'extreme close-up, intimate framing, shallow depth of field',
+      wide: 'ultra-wide angle, expansive vista, grand scale',
+      dutch: 'dutch angle, tilted frame, unsettling perspective',
+      firstPerson: 'first-person POV, through the dreamer\'s eyes',
+      overhead: 'top-down overhead view, flat lay perspective',
+    };
+
+    const characterMap = {
+      auto: '',
+      female: 'featuring a female figure as the central character',
+      male: 'featuring a male figure as the central character',
+      androgynous: 'featuring an androgynous ethereal figure',
+      silhouette: 'figures shown only as dark silhouettes',
+      noCharacters: 'no human figures, empty landscape, absence of people',
     };
     const styleDesc = styleMap[style] || 'dreamlike artistic style';
 
@@ -85,7 +112,7 @@ OUTPUT: Return ONLY the image prompt, no explanation. Keep it under 200 words. M
           },
           {
             role: 'user',
-            content: `Dream journal entry:\n"${dreamText.substring(0, 800)}"\n\nArt style: ${styleDesc}\n\nCreate a vivid image prompt that captures the essence and emotional core of this dream.`
+            content: `Dream journal entry:\n"${dreamText.substring(0, 800)}"\n\nArt style: ${styleDesc}${angleMap[angle] ? `\nCamera angle: ${angleMap[angle]}` : ''}${characterMap[character] ? `\nCharacter direction: ${characterMap[character]}` : ''}\n\nCreate a vivid image prompt that captures the essence and emotional core of this dream.`
           }
         ],
         max_tokens: 250,
@@ -97,7 +124,9 @@ OUTPUT: Return ONLY the image prompt, no explanation. Keep it under 200 words. M
       prompt = `Dream visualization: ${dreamText.substring(0, 500)}. Style: ${styleDesc}. High quality, detailed, atmospheric.`;
     }
     
-    // Append style and quality modifiers
+    // Append angle, character direction, and quality modifiers
+    if (angleMap[angle]) prompt += `. Camera: ${angleMap[angle]}`;
+    if (characterMap[character]) prompt += `. ${characterMap[character]}`;
     prompt += `. ${styleDesc}. Masterpiece quality, highly detailed, atmospheric depth.`;
 
     console.log('Final prompt:', prompt.substring(0, 150) + '...');
