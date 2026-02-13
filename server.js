@@ -116,10 +116,12 @@ app.post('/api/generate-image', async (req, res) => {
       .single();
 
     if (insertError) {
-      console.error('DB insert error:', insertError);
-      return res.status(500).json({ error: 'Failed to save image' });
+      console.error('DB insert error:', JSON.stringify(insertError));
+      // Still return success with the image URL even if DB save fails
+      return res.json({ success: true, imageUrl: finalUrl, prompt, dbError: insertError.message });
     }
 
+    console.log('Dream image saved to DB:', dreamImage?.id);
     res.json({ success: true, imageUrl: finalUrl, prompt, dreamImage });
   } catch (err) {
     console.error('Generation error:', err.message);
