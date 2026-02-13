@@ -39,7 +39,7 @@ app.post('/api/generate-image', async (req, res) => {
     if (authError || !data.user) return res.status(401).json({ error: 'Unauthorized' });
     const user = data.user;
 
-    const { dreamId, dreamText, style, angle, character } = req.body;
+    const { dreamId, dreamText, style, angle, character, colorPalette } = req.body;
     if (!dreamId || !dreamText?.trim() || !style) {
       return res.status(400).json({ error: 'dreamId, dreamText, and style are required' });
     }
@@ -85,6 +85,22 @@ app.post('/api/generate-image', async (req, res) => {
       silhouette: 'figures shown only as dark silhouettes',
       noCharacters: 'no human figures, empty landscape, absence of people',
     };
+
+    const colorMap = {
+      auto: '',
+      warmGolden: 'warm golden hour color palette, amber and honey tones, soft warm light',
+      coolBlue: 'cool blue color palette, cyan and navy tones, cold ethereal light',
+      moodyDesaturated: 'desaturated moody colors, muted tones, low saturation, atmospheric grey',
+      neonVibrant: 'vibrant neon colors, electric pink and cyan, high saturation, glowing',
+      pastelSoft: 'soft pastel colors, baby pink and lavender and mint, gentle dreamy tones',
+      darkShadowy: 'very dark color palette, deep shadows, barely visible details, noir',
+      sunsetWarm: 'sunset colors, deep orange and magenta and purple gradient sky',
+      moonlitSilver: 'moonlit silver and blue, cool night palette, luminous pale light',
+      emeraldGreen: 'rich emerald and jade green palette, lush vegetation tones, forest light',
+      bloodRed: 'deep crimson and blood red palette, dramatic scarlet accents, intense',
+      sepiaDream: 'sepia-toned, vintage warmth, old photograph aesthetic, nostalgic amber',
+      iridescent: 'iridescent holographic colors, rainbow oil-slick shimmer, prismatic light',
+    };
     const styleDesc = styleMap[style] || 'dreamlike artistic style';
 
     console.log('Crafting dream prompt with GPT-4o-mini for dream:', dreamId);
@@ -112,7 +128,7 @@ OUTPUT: Return ONLY the image prompt, no explanation. Keep it under 200 words. M
           },
           {
             role: 'user',
-            content: `Dream journal entry:\n"${dreamText.substring(0, 800)}"\n\nArt style: ${styleDesc}${angleMap[angle] ? `\nCamera angle: ${angleMap[angle]}` : ''}${characterMap[character] ? `\nCharacter direction: ${characterMap[character]}` : ''}\n\nCreate a vivid image prompt that captures the essence and emotional core of this dream.`
+            content: `Dream journal entry:\n"${dreamText.substring(0, 800)}"\n\nArt style: ${styleDesc}${angleMap[angle] ? `\nCamera angle: ${angleMap[angle]}` : ''}${characterMap[character] ? `\nCharacter direction: ${characterMap[character]}` : ''}${colorMap[colorPalette] ? `\nColor palette: ${colorMap[colorPalette]}` : ''}\n\nCreate a vivid image prompt that captures the essence and emotional core of this dream.`
           }
         ],
         max_tokens: 250,
@@ -127,6 +143,7 @@ OUTPUT: Return ONLY the image prompt, no explanation. Keep it under 200 words. M
     // Append angle, character direction, and quality modifiers
     if (angleMap[angle]) prompt += `. Camera: ${angleMap[angle]}`;
     if (characterMap[character]) prompt += `. ${characterMap[character]}`;
+    if (colorMap[colorPalette]) prompt += `. Color: ${colorMap[colorPalette]}`;
     prompt += `. ${styleDesc}. Masterpiece quality, highly detailed, atmospheric depth.`;
 
     console.log('Final prompt:', prompt.substring(0, 150) + '...');
