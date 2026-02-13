@@ -71,17 +71,43 @@ app.post('/api/generate-image', async (req, res) => {
       n: 1,
     });
 
-    const imageUrl = response.data?.[0]?.url;
-    if (!imageUrl) throw new Error('No image URL returned');
+    const dalleUrl = response.data?.[0]?.url;
+    if (!dalleUrl) throw new Error('No image URL returned');
 
-    console.log('Image generated, saving to DB...');
+    console.log('Image generated, uploading to storage...');
+
+    // Download and upload to Supabase Storage for permanent URL
+    let finalUrl = dalleUrl;
+    try {
+      const imgRes = await fetch(dalleUrl);
+      if (imgRes.ok) {
+        const imgBuffer = Buffer.from(await imgRes.arrayBuffer());
+        const fileName = `${user.id}/${dreamId}/${Date.now()}.png`;
+        
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('dream-images')
+          .upload(fileName, imgBuffer, { contentType: 'image/png', upsert: true });
+
+        if (!uploadError && uploadData) {
+          const { data: pubData } = supabase.storage
+            .from('dream-images')
+            .getPublicUrl(fileName);
+          finalUrl = pubData.publicUrl;
+          console.log('Uploaded to storage:', finalUrl);
+        } else {
+          console.warn('Storage upload failed:', uploadError?.message);
+        }
+      }
+    } catch (storageErr) {
+      console.warn('Storage upload error:', storageErr.message);
+    }
 
     // Save to database
     const { data: dreamImage, error: insertError } = await supabase
       .from('dream_images')
       .insert([{
         dream_id: dreamId,
-        image_url: imageUrl,
+        image_url: finalUrl,
         style,
         prompt_used: prompt,
         generation_params: { model: 'dall-e-3', style, timestamp: new Date().toISOString() }
@@ -94,7 +120,7 @@ app.post('/api/generate-image', async (req, res) => {
       return res.status(500).json({ error: 'Failed to save image' });
     }
 
-    res.json({ success: true, imageUrl, prompt, dreamImage });
+    res.json({ success: true, imageUrl: finalUrl, prompt, dreamImage });
   } catch (err) {
     console.error('Generation error:', err.message);
     res.status(500).json({ success: false, error: err.message });
