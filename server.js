@@ -18,6 +18,9 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
   timeout: 120000,
@@ -364,6 +367,105 @@ app.get('/api/proxy-image', async (req, res) => {
     res.send(buffer);
   } catch (err) {
     res.status(502).json({ error: 'Proxy error' });
+  }
+});
+
+// ── POST /api/transcribe ───────────────────────────────────────────
+
+app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
+  try {
+    const auth = await authenticateRequest(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'No audio file provided' });
+    }
+
+    const GROQ_API_KEY = process.env.GROQ_API_KEY;
+    if (!GROQ_API_KEY) {
+      return res.status(500).json({ error: 'Groq API key not configured' });
+    }
+
+    // Build multipart form for Groq API
+    const FormData = (await import('undici')).FormData;
+    const formData = new FormData();
+    const blob = new Blob([req.file.buffer], { type: req.file.mimetype || 'audio/webm' });
+    formData.append('file', blob, req.file.originalname || 'audio.webm');
+    formData.append('model', 'whisper-large-v3');
+    formData.append('prompt', 'Dream journal entry, recording after waking up');
+
+    const groqRes = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${GROQ_API_KEY}` },
+      body: formData,
+    });
+
+    if (!groqRes.ok) {
+      const errText = await groqRes.text();
+      console.error('Groq API error:', groqRes.status, errText);
+      return res.status(502).json({ error: 'Transcription failed', details: errText });
+    }
+
+    const result = await groqRes.json();
+    console.log('Transcription complete:', (result.text || '').substring(0, 100) + '...');
+    res.json({ success: true, text: result.text || '' });
+  } catch (err) {
+    console.error('Transcribe error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── POST /api/structure-dream ──────────────────────────────────────
+
+app.post('/api/structure-dream', async (req, res) => {
+  try {
+    const auth = await authenticateRequest(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { text } = req.body;
+    if (!text?.trim()) {
+      return res.status(400).json({ error: 'text is required' });
+    }
+
+    const result = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a dream journal assistant. The user just woke up and recorded a voice memo about their dream. The text is raw speech transcription — it may be rambling, repetitive, or incoherent.
+
+Your job:
+1. Clean up the text into readable paragraphs while preserving the dream's narrative
+2. Extract a short, evocative title (max 6 words)
+3. Suggest a mood from: amazing, good, neutral, confused, scared, nightmare
+4. Suggest 2-5 relevant tags (single words, lowercase)
+
+Return JSON only:
+{
+  "title": "string",
+  "content": "string (cleaned up, paragraphed dream text)",
+  "mood": "string (one of the mood options)",
+  "tags": ["string"]
+}`
+        },
+        { role: 'user', content: text }
+      ],
+      max_tokens: 1000,
+      temperature: 0.7,
+      response_format: { type: 'json_object' },
+    });
+
+    const structured = JSON.parse(result.choices[0]?.message?.content || '{}');
+    res.json({
+      success: true,
+      title: structured.title || 'Untitled Dream',
+      content: structured.content || text,
+      mood: structured.mood || 'neutral',
+      tags: structured.tags || [],
+    });
+  } catch (err) {
+    console.error('Structure dream error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
