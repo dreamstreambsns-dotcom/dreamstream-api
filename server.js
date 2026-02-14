@@ -555,6 +555,82 @@ Return JSON only:
   }
 });
 
+// ── POST /api/detect-patterns ──────────────────────────────────────
+
+app.post('/api/detect-patterns', async (req, res) => {
+  try {
+    const auth = await authenticateRequest(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { dreams } = req.body;
+    if (!Array.isArray(dreams) || dreams.length < 2) {
+      return res.status(400).json({ error: 'At least 2 dreams are required' });
+    }
+
+    // Build a summary of dreams for GPT
+    const dreamSummaries = dreams.slice(0, 50).map((d, i) => {
+      const tags = (d.tags || []).join(', ');
+      const mood = d.mood || 'unknown';
+      return `Dream ${i + 1} (${d.date || 'unknown date'}, mood: ${mood}${tags ? ', tags: ' + tags : ''}):\n${(d.content || '').substring(0, 300)}`;
+    }).join('\n\n');
+
+    const result = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a dream pattern analyst. Given multiple dream journal entries, identify recurring patterns across them.
+
+Find:
+1. **Recurring themes** — repeated motifs, situations, or storylines
+2. **Recurring symbols** — objects, elements, or imagery that appear multiple times
+3. **Recurring characters** — people, creatures, or entities that reappear
+4. **Recurring locations** — places or settings that repeat
+5. **Emotional patterns** — mood trends or emotional arcs
+
+For each pattern:
+- Give it a short name (2-4 words)
+- Describe the pattern briefly (1-2 sentences)
+- List which dream numbers it appears in
+- Rate its frequency: "high" (>50% of dreams), "medium" (25-50%), or "low" (<25%)
+- Assign a category: "theme", "symbol", "character", "location", or "emotion"
+- Suggest a single emoji that represents it
+
+Return JSON only:
+{
+  "patterns": [
+    {
+      "name": "string",
+      "description": "string",
+      "dreamIndices": [0, 1, 3],
+      "frequency": "high|medium|low",
+      "category": "theme|symbol|character|location|emotion",
+      "emoji": "string",
+      "count": 3
+    }
+  ],
+  "summary": "A 2-3 sentence overall summary of the dreamer's pattern landscape"
+}`
+        },
+        { role: 'user', content: `Analyze these ${dreams.length} dreams for recurring patterns:\n\n${dreamSummaries}` }
+      ],
+      max_tokens: 1500,
+      temperature: 0.4,
+      response_format: { type: 'json_object' },
+    });
+
+    const parsed = JSON.parse(result.choices[0]?.message?.content || '{}');
+    res.json({
+      success: true,
+      patterns: parsed.patterns || [],
+      summary: parsed.summary || '',
+    });
+  } catch (err) {
+    console.error('Detect patterns error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 const PORT = process.env.PORT || 3456;
