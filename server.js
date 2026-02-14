@@ -478,6 +478,83 @@ Return JSON only:
   }
 });
 
+// ── POST /api/auto-tag ────────────────────────────────────────────
+
+app.post('/api/auto-tag', async (req, res) => {
+  try {
+    const auth = await authenticateRequest(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+
+    const { text, title } = req.body;
+    if (!text?.trim()) {
+      return res.status(400).json({ error: 'text is required' });
+    }
+
+    const result = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a dream analysis AI. Given a dream journal entry, extract meaningful tags in these categories:
+
+1. **characters** — people, animals, creatures (e.g. "mother", "stranger", "dog", "dragon")
+2. **locations** — places, settings (e.g. "ocean", "school", "forest", "city")
+3. **emotions** — feelings experienced (e.g. "fear", "joy", "confusion", "wonder")
+4. **themes** — recurring motifs, symbols (e.g. "flying", "falling", "chase", "water", "death", "transformation")
+5. **objects** — significant items (e.g. "mirror", "door", "car", "phone")
+
+Rules:
+- Each tag is 1-2 lowercase words
+- 3-8 total tags (quality over quantity)
+- Only extract what's actually in the dream, don't infer
+- Prioritize unusual/specific tags over generic ones
+
+Return JSON only:
+{
+  "tags": ["string"],
+  "characters": ["string"],
+  "locations": ["string"],
+  "emotions": ["string"],
+  "themes": ["string"],
+  "objects": ["string"]
+}`
+        },
+        { role: 'user', content: `Title: ${title || 'Untitled'}\n\nDream:\n${text}` }
+      ],
+      max_tokens: 300,
+      temperature: 0.3,
+      response_format: { type: 'json_object' },
+    });
+
+    const parsed = JSON.parse(result.choices[0]?.message?.content || '{}');
+    
+    // Flatten all categories into a single tags array (deduplicated)
+    const allTags = new Set([
+      ...(parsed.tags || []),
+      ...(parsed.characters || []),
+      ...(parsed.locations || []),
+      ...(parsed.emotions || []),
+      ...(parsed.themes || []),
+      ...(parsed.objects || []),
+    ]);
+
+    res.json({
+      success: true,
+      tags: [...allTags].slice(0, 12),
+      categories: {
+        characters: parsed.characters || [],
+        locations: parsed.locations || [],
+        emotions: parsed.emotions || [],
+        themes: parsed.themes || [],
+        objects: parsed.objects || [],
+      },
+    });
+  } catch (err) {
+    console.error('Auto-tag error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 const PORT = process.env.PORT || 3456;
