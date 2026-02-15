@@ -184,6 +184,8 @@ DREAM INTERPRETATION RULES:
 
 EMOTIONAL INTENSITY: ${intensityDesc}
 
+SAFETY: NEVER include nudity, sexual content, graphic violence, gore, or real people in the prompt. Keep all output safe for all ages. If the dream contains such elements, translate them into abstract visual metaphors instead.
+
 OUTPUT: Return ONLY the image prompt, no explanation. Keep it under 200 words. Make it painterly and evocative, not clinical.`;
 }
 
@@ -247,6 +249,17 @@ app.post('/api/craft-prompt', async (req, res) => {
     const { dreamId, dreamText, style, angle, character, colorPalette, dreamType, intensity, timeOfDay, weather } = req.body;
     if (!dreamText?.trim() || !style) {
       return res.status(400).json({ error: 'dreamText and style are required' });
+    }
+
+    // NSFW filter
+    const BLOCKED_TERMS = [
+      'nude', 'naked', 'nsfw', 'porn', 'sexual', 'explicit', 'erotic',
+      'genitals', 'breasts', 'topless', 'orgasm', 'intercourse',
+      'hentai', 'xxx', 'fetish', 'bondage', 'gore', 'mutilation',
+      'child abuse', 'pedophil', 'underage',
+    ];
+    if (BLOCKED_TERMS.some(t => dreamText.toLowerCase().includes(t))) {
+      return res.status(400).json({ error: 'Content cannot be visualized. Please edit and try again.', code: 'CONTENT_BLOCKED' });
     }
 
     const interpretation = await openai.chat.completions.create({
@@ -318,6 +331,22 @@ app.post('/api/generate-image', async (req, res) => {
 
     if (!dreamId || !dreamText?.trim() || !style) {
       return res.status(400).json({ error: 'dreamId, dreamText, and style are required' });
+    }
+
+    // NSFW content filter — block before wasting API calls
+    const BLOCKED_TERMS = [
+      'nude', 'naked', 'nsfw', 'porn', 'sexual', 'explicit', 'erotic',
+      'genitals', 'breasts', 'topless', 'orgasm', 'intercourse',
+      'hentai', 'xxx', 'fetish', 'bondage', 'gore', 'mutilation',
+      'child abuse', 'pedophil', 'underage',
+    ];
+    const textToCheck = `${dreamText} ${prompt || ''}`.toLowerCase();
+    const blocked = BLOCKED_TERMS.some(term => textToCheck.includes(term));
+    if (blocked) {
+      return res.status(400).json({ 
+        error: 'Your dream contains content that cannot be visualized. Please edit the description and try again.',
+        code: 'CONTENT_BLOCKED'
+      });
     }
 
     // Verify dream ownership
