@@ -2,12 +2,62 @@ const express = require('express');
 const cors = require('cors');
 const OpenAI = require('openai');
 const { createClient } = require('@supabase/supabase-js');
+const helmet = require('helmet');
 
 const app = express();
 
-// Manual CORS middleware (Express 5 compatible)
+// Security headers
+app.use(helmet({
+  contentSecurityPolicy: false, // Flutter web needs inline scripts
+  crossOriginEmbedderPolicy: false,
+}));
+
+// Rate limiting — per IP
+const rateLimit = new Map();
+const RATE_WINDOW_MS = 60_000; // 1 minute
+const RATE_MAX_REQUESTS = 30;  // 30 requests per minute
+
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
+  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  const now = Date.now();
+  const entry = rateLimit.get(ip) || { count: 0, resetAt: now + RATE_WINDOW_MS };
+  
+  if (now > entry.resetAt) {
+    entry.count = 0;
+    entry.resetAt = now + RATE_WINDOW_MS;
+  }
+  
+  entry.count++;
+  rateLimit.set(ip, entry);
+  
+  if (entry.count > RATE_MAX_REQUESTS) {
+    return res.status(429).json({ error: 'Too many requests. Please wait.' });
+  }
+  next();
+});
+
+// Clean up rate limit map every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of rateLimit) {
+    if (now > entry.resetAt) rateLimit.delete(ip);
+  }
+}, 300_000);
+
+// Manual CORS middleware (Express 5 compatible)
+const ALLOWED_ORIGINS = [
+  'https://dreamstream-seven.vercel.app',
+  'https://dreamstream-app.surge.sh',
+  'http://localhost:3000',
+  'http://localhost:8080',
+  'http://localhost:5000',
+];
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin || '*');
+  }
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') {
@@ -16,7 +66,8 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json());
+// Body size limit
+app.use(express.json({ limit: '1mb' }));
 
 const multer = require('multer');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
@@ -134,6 +185,17 @@ DREAM INTERPRETATION RULES:
 EMOTIONAL INTENSITY: ${intensityDesc}
 
 OUTPUT: Return ONLY the image prompt, no explanation. Keep it under 200 words. Make it painterly and evocative, not clinical.`;
+}
+
+// Input sanitization
+function sanitizeText(text, maxLen = 5000) {
+  if (typeof text !== 'string') return '';
+  return text.slice(0, maxLen).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+}
+
+function validateEnum(value, allowed) {
+  if (!value || typeof value !== 'string') return undefined;
+  return allowed.includes(value) ? value : undefined;
 }
 
 function buildUserPrompt({ dreamText, style, angle, character, colorPalette, dreamType, timeOfDay, weather }) {
@@ -358,11 +420,40 @@ app.get('/api/proxy-image', async (req, res) => {
   const imageUrl = req.query.url;
   if (!imageUrl) return res.status(400).json({ error: 'url required' });
 
+  // SSRF protection: only allow Supabase storage and OpenAI URLs
+  const ALLOWED_HOSTS = [
+    'kgqijksnkffxqjjplgqo.supabase.co',
+    'oaidalleapiprodscus.blob.core.windows.net',
+  ];
+  try {
+    const parsedUrl = new URL(imageUrl);
+    if (!ALLOWED_HOSTS.some(h => parsedUrl.hostname.endsWith(h))) {
+      return res.status(403).json({ error: 'URL not allowed' });
+    }
+    if (parsedUrl.protocol !== 'https:') {
+      return res.status(403).json({ error: 'HTTPS only' });
+    }
+  } catch {
+    return res.status(400).json({ error: 'Invalid URL' });
+  }
+
   try {
     const response = await fetch(imageUrl);
     if (!response.ok) return res.status(502).json({ error: 'Failed to fetch' });
+    
+    const contentType = response.headers.get('content-type') || 'image/png';
+    if (!contentType.startsWith('image/')) {
+      return res.status(403).json({ error: 'Not an image' });
+    }
+    
     const buffer = Buffer.from(await response.arrayBuffer());
-    res.set('Content-Type', response.headers.get('content-type') || 'image/png');
+    
+    // Max 10MB
+    if (buffer.length > 10 * 1024 * 1024) {
+      return res.status(413).json({ error: 'Image too large' });
+    }
+    
+    res.set('Content-Type', contentType);
     res.set('Cache-Control', 'public, max-age=86400');
     res.send(buffer);
   } catch (err) {
