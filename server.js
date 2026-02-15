@@ -751,6 +751,67 @@ Return JSON only:
   }
 });
 
+// ── POST /api/describe-sketch ──────────────────────────────────────
+
+app.post('/api/describe-sketch', upload.single('sketch'), async (req, res) => {
+  try {
+    const auth = await authenticateRequest(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'No sketch image provided' });
+    }
+
+    const dreamContext = req.body.dreamText || '';
+    const base64Image = req.file.buffer.toString('base64');
+    const mimeType = req.file.mimetype || 'image/png';
+
+    const result = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a sketch interpreter for a dream visualization app. The user drew a quick sketch representing elements from their dream. Describe what you see in the sketch in vivid, specific visual terms that can enhance an image generation prompt.
+
+Focus on:
+- Shapes, objects, and their spatial arrangement
+- Any recognizable elements (buildings, figures, landscapes, etc.)
+- The composition and layout
+- Implied movement or energy
+
+Keep your description to 2-3 sentences. Be specific and visual. Do NOT mention that it's a sketch or drawing — describe it as if describing a scene.`
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: dreamContext
+                ? `Here is my sketch of elements from my dream. Dream context: "${dreamContext.substring(0, 500)}"`
+                : 'Here is my sketch of elements from my dream. Describe what you see.',
+            },
+            {
+              type: 'image_url',
+              image_url: {
+                url: `data:${mimeType};base64,${base64Image}`,
+                detail: 'low',
+              },
+            },
+          ],
+        },
+      ],
+      max_tokens: 200,
+      temperature: 0.7,
+    });
+
+    const description = result.choices[0]?.message?.content || '';
+    res.json({ success: true, description });
+  } catch (err) {
+    console.error('Describe sketch error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 const PORT = process.env.PORT || 3456;
