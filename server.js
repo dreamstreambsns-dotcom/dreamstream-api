@@ -818,6 +818,38 @@ Keep your description to 2-3 sentences. Be specific and visual. Do NOT mention t
   }
 });
 
+// ── POST /api/waitlist ─────────────────────────────────────────────
+
+const waitlistEmails = [];
+
+app.post('/api/waitlist', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email || !email.includes('@')) {
+      return res.status(400).json({ error: 'Valid email required' });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    
+    // Store in Supabase if available
+    try {
+      const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      await supabase.from('waitlist').insert({ email: cleanEmail });
+    } catch (dbErr) {
+      // Table might not exist yet — store in memory as fallback
+      if (!waitlistEmails.includes(cleanEmail)) {
+        waitlistEmails.push(cleanEmail);
+      }
+      console.log('Waitlist (memory):', waitlistEmails.length, 'emails');
+    }
+
+    res.json({ success: true, message: 'Added to waitlist!' });
+  } catch (err) {
+    console.error('Waitlist error:', err.message);
+    res.status(500).json({ error: 'Failed to join waitlist' });
+  }
+});
+
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 const PORT = process.env.PORT || 3456;
