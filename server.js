@@ -50,14 +50,18 @@ setInterval(() => {
 const ALLOWED_ORIGINS = [
   'https://dreamstream-seven.vercel.app',
   'https://dreamstream-app.surge.sh',
-  'http://localhost:3000',
-  'http://localhost:8080',
-  'http://localhost:5000',
 ];
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  if (ALLOWED_ORIGINS.includes(origin)) return true;
+  if (origin.match(/^http:\/\/localhost(:\d+)?$/)) return true;
+  return false;
+}
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+  if (isAllowedOrigin(origin)) {
     res.header('Access-Control-Allow-Origin', origin || '*');
   }
   res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
