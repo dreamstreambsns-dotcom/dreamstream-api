@@ -853,4 +853,4 @@ app.post('/api/waitlist', async (req, res) => {
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 const PORT = process.env.PORT || 3456;
-app.listen(PORT, () => console.log(`DreamStream API running on port ${PORT}`));
+app.listen(PORT, () => console.log(`LucidInk API running on port ${PORT}`));
