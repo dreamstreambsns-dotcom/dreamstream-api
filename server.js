@@ -334,7 +334,8 @@ app.post('/api/generate-image', async (req, res) => {
     if (!auth) return res.status(401).json({ error: 'Unauthorized' });
     const { user, supabase } = auth;
 
-    const { dreamId, dreamText, style, angle, character, colorPalette, dreamType, intensity, timeOfDay, weather } = req.body;
+    const { dreamId, dreamText, style, angle, character, colorPalette, dreamType, intensity, timeOfDay, weather, engine } = req.body;
+    const useFlux = engine === 'flux';
     let { prompt } = req.body;
 
     if (!dreamId || !dreamText?.trim() || !style) {
@@ -387,23 +388,57 @@ app.post('/api/generate-image', async (req, res) => {
 
     console.log('Final prompt:', prompt.substring(0, 150) + '...');
 
-    const response = await openai.images.generate({
-      model: 'dall-e-3',
-      prompt,
-      size: '1024x1024',
-      quality: 'standard',
-      n: 1,
-    });
+    let generatedUrl;
+    let usedModel = 'dall-e-3';
 
-    const dalleUrl = response.data?.[0]?.url;
-    if (!dalleUrl) throw new Error('No image URL returned');
+    if (useFlux) {
+      // ── Flux via Replicate ──
+      usedModel = 'flux-1.1-pro';
+      const REPLICATE_TOKEN = process.env.REPLICATE_API_TOKEN;
+      if (!REPLICATE_TOKEN) throw new Error('Replicate API token not configured');
+
+      const repRes = await fetch('https://api.replicate.com/v1/models/black-forest-labs/flux-1.1-pro/predictions', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${REPLICATE_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input: { prompt, aspect_ratio: '1:1', output_format: 'jpg' } }),
+      });
+      const repData = await repRes.json();
+      if (!repData.id) throw new Error('Flux prediction failed to start');
+
+      // Poll for result (max 60s)
+      let result = repData;
+      for (let i = 0; i < 30; i++) {
+        if (result.status === 'succeeded') break;
+        if (result.status === 'failed' || result.status === 'canceled') throw new Error(`Flux generation ${result.status}: ${result.error || 'unknown'}`);
+        await new Promise(r => setTimeout(r, 2000));
+        const pollRes = await fetch(`https://api.replicate.com/v1/predictions/${repData.id}`, {
+          headers: { 'Authorization': `Bearer ${REPLICATE_TOKEN}` },
+        });
+        result = await pollRes.json();
+      }
+      if (result.status !== 'succeeded') throw new Error('Flux generation timed out');
+      generatedUrl = result.output;
+      if (!generatedUrl) throw new Error('No image URL from Flux');
+      console.log('Flux image generated:', generatedUrl);
+    } else {
+      // ── DALL-E 3 ──
+      const response = await openai.images.generate({
+        model: 'dall-e-3',
+        prompt,
+        size: '1024x1024',
+        quality: 'standard',
+        n: 1,
+      });
+      generatedUrl = response.data?.[0]?.url;
+      if (!generatedUrl) throw new Error('No image URL returned');
+    }
 
     console.log('Image generated, uploading to storage...');
 
     // Download and upload to Supabase Storage for permanent URL
-    let finalUrl = dalleUrl;
+    let finalUrl = generatedUrl;
     try {
-      const imgRes = await fetch(dalleUrl);
+      const imgRes = await fetch(generatedUrl);
       if (imgRes.ok) {
         const imgBuffer = Buffer.from(await imgRes.arrayBuffer());
         const fileName = `${user.id}/${dreamId}/${Date.now()}.png`;
@@ -434,7 +469,7 @@ app.post('/api/generate-image', async (req, res) => {
         image_url: finalUrl,
         style,
         prompt_used: prompt,
-        generation_params: { model: 'dall-e-3', style, dreamType, intensity, timeOfDay, weather, timestamp: new Date().toISOString() }
+        generation_params: { model: usedModel, style, dreamType, intensity, timeOfDay, weather, engine: useFlux ? 'flux' : 'dalle', timestamp: new Date().toISOString() }
       }])
       .select('*')
       .single();
