@@ -50,6 +50,8 @@ setInterval(() => {
 const ALLOWED_ORIGINS = [
   'https://dreamstream-seven.vercel.app',
   'https://dreamstream-app.surge.sh',
+  'https://dreamstreambsns-dotcom.github.io',
+  'https://lucidink.surge.sh',
 ];
 
 function isAllowedOrigin(origin) {
