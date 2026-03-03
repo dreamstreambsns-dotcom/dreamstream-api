@@ -887,6 +887,205 @@ app.post('/api/waitlist', async (req, res) => {
   }
 });
 
+// ── POST /api/generate-reel ────────────────────────────────────────
+// Dream Reel Pipeline: dream text → 3 key frames (Flux) → animate (Luma Ray) → video URLs
+
+app.post('/api/generate-reel', async (req, res) => {
+  try {
+    const auth = await authenticateRequest(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+    const { user, supabase } = auth;
+
+    const { dreamId, dreamText, style } = req.body;
+    if (!dreamId || !dreamText?.trim()) {
+      return res.status(400).json({ error: 'dreamId and dreamText are required' });
+    }
+
+    const REPLICATE_TOKEN = process.env.REPLICATE_API_TOKEN;
+    if (!REPLICATE_TOKEN) return res.status(500).json({ error: 'Video generation not configured' });
+
+    // Verify dream ownership
+    const { data: dream, error: dreamError } = await supabase
+      .from('dreams').select('user_id, title, mood').eq('id', dreamId).single();
+    if (dreamError || !dream) return res.status(404).json({ error: 'Dream not found' });
+    if (dream.user_id !== user.id) return res.status(403).json({ error: 'Forbidden' });
+
+    console.log('🎬 Starting Dream Reel pipeline for dream:', dreamId);
+
+    // Step 1: Generate 3 key frame prompts with GPT
+    const framePrompts = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a dream cinematographer. Given a dream description, create exactly 3 visual prompts for key frames of a short dream film:
+1. OPENING — the establishing shot, setting the scene
+2. CLIMAX — the most intense/surreal moment of the dream
+3. ENDING — the resolution or fade-out moment
+
+Each prompt should be a detailed visual description (2-3 sentences) suitable for AI image generation.
+Style: ${style || 'surrealist, cinematic, dreamlike'}.
+Return ONLY a JSON array of 3 strings, no other text.`
+        },
+        { role: 'user', content: dreamText.substring(0, 1000) }
+      ],
+      max_tokens: 500,
+      temperature: 0.9,
+    });
+
+    let frames;
+    try {
+      const content = framePrompts.choices[0]?.message?.content || '[]';
+      frames = JSON.parse(content.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+    } catch (parseErr) {
+      console.error('Failed to parse frame prompts:', parseErr.message);
+      return res.status(500).json({ error: 'Failed to generate frame prompts' });
+    }
+
+    if (!Array.isArray(frames) || frames.length < 2) {
+      return res.status(500).json({ error: 'Invalid frame prompts generated' });
+    }
+
+    console.log(`🖼️ Generated ${frames.length} frame prompts`);
+
+    // Step 2: Generate key frame images with Flux
+    const imageUrls = [];
+    for (let i = 0; i < frames.length; i++) {
+      console.log(`🎨 Generating frame ${i + 1}/${frames.length}...`);
+      
+      const repRes = await fetch('https://api.replicate.com/v1/models/black-forest-labs/flux-1.1-pro/predictions', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${REPLICATE_TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ input: { prompt: frames[i], aspect_ratio: '9:16', output_format: 'jpg' } }),
+      });
+      const repData = await repRes.json();
+      if (!repData.id) {
+        console.error('Flux prediction failed:', repData);
+        continue;
+      }
+
+      // Poll for result
+      let result = repData;
+      for (let j = 0; j < 30; j++) {
+        if (result.status === 'succeeded') break;
+        if (result.status === 'failed' || result.status === 'canceled') break;
+        await new Promise(r => setTimeout(r, 2000));
+        const pollRes = await fetch(`https://api.replicate.com/v1/predictions/${repData.id}`, {
+          headers: { 'Authorization': `Bearer ${REPLICATE_TOKEN}` },
+        });
+        result = await pollRes.json();
+      }
+      if (result.status === 'succeeded' && result.output) {
+        imageUrls.push(result.output);
+        console.log(`✅ Frame ${i + 1} generated`);
+      }
+
+      // Rate limit pause between generations
+      if (i < frames.length - 1) await new Promise(r => setTimeout(r, 2000));
+    }
+
+    if (imageUrls.length === 0) {
+      return res.status(500).json({ error: 'Failed to generate any frames' });
+    }
+
+    // Step 3: Animate first frame with Luma Ray (image-to-video)
+    console.log('🎬 Animating with Luma Ray...');
+    
+    const motionPrompt = `Slow cinematic camera movement, dreamlike atmosphere, elements gently shift and flow, ethereal lighting transitions, surreal and hypnotic motion`;
+
+    const videoRes = await fetch('https://api.replicate.com/v1/models/luma/ray/predictions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${REPLICATE_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        input: {
+          prompt: motionPrompt,
+          image: imageUrls[0],
+          duration: 5,
+        }
+      }),
+    });
+    const videoData = await videoRes.json();
+
+    let videoUrl = null;
+    if (videoData.id) {
+      let videoResult = videoData;
+      // Video generation takes longer — poll up to 3 minutes
+      for (let j = 0; j < 60; j++) {
+        if (videoResult.status === 'succeeded') break;
+        if (videoResult.status === 'failed' || videoResult.status === 'canceled') break;
+        await new Promise(r => setTimeout(r, 3000));
+        const pollRes = await fetch(`https://api.replicate.com/v1/predictions/${videoData.id}`, {
+          headers: { 'Authorization': `Bearer ${REPLICATE_TOKEN}` },
+        });
+        videoResult = await pollRes.json();
+      }
+      if (videoResult.status === 'succeeded' && videoResult.output) {
+        videoUrl = videoResult.output;
+        console.log('✅ Video generated:', videoUrl);
+      } else {
+        console.error('Video generation failed:', videoResult.status, videoResult.error);
+      }
+    }
+
+    // Upload frames to Supabase Storage
+    const savedFrames = [];
+    for (let i = 0; i < imageUrls.length; i++) {
+      try {
+        const imgRes = await fetch(imageUrls[i]);
+        if (imgRes.ok) {
+          const imgBuffer = Buffer.from(await imgRes.arrayBuffer());
+          const fileName = `${user.id}/${dreamId}/reel-frame-${i}-${Date.now()}.jpg`;
+          const { data: uploadData, error: uploadError } = await supabase.storage
+            .from('dream-images')
+            .upload(fileName, imgBuffer, { contentType: 'image/jpeg', upsert: true });
+          if (!uploadError && uploadData) {
+            const { data: pubData } = supabase.storage.from('dream-images').getPublicUrl(fileName);
+            savedFrames.push(pubData.publicUrl);
+          }
+        }
+      } catch (e) {
+        console.warn(`Frame ${i} upload failed:`, e.message);
+        savedFrames.push(imageUrls[i]); // fallback to temp URL
+      }
+    }
+
+    // Upload video to Supabase Storage if available
+    let savedVideoUrl = videoUrl;
+    if (videoUrl) {
+      try {
+        const vidRes = await fetch(videoUrl);
+        if (vidRes.ok) {
+          const vidBuffer = Buffer.from(await vidRes.arrayBuffer());
+          const vidFileName = `${user.id}/${dreamId}/reel-${Date.now()}.mp4`;
+          const { data: uploadData, error: uploadError } = await supabase.storage
+            .from('dream-images')
+            .upload(vidFileName, vidBuffer, { contentType: 'video/mp4', upsert: true });
+          if (!uploadError && uploadData) {
+            const { data: pubData } = supabase.storage.from('dream-images').getPublicUrl(vidFileName);
+            savedVideoUrl = pubData.publicUrl;
+          }
+        }
+      } catch (e) {
+        console.warn('Video upload failed:', e.message);
+      }
+    }
+
+    console.log('🎬 Dream Reel pipeline complete!');
+
+    res.json({
+      success: true,
+      frames: savedFrames,
+      framePrompts: frames,
+      videoUrl: savedVideoUrl,
+      model: 'flux-1.1-pro + luma-ray',
+    });
+
+  } catch (err) {
+    console.error('Dream Reel error:', err.message);
+    res.status(500).json({ error: 'Failed to generate dream reel: ' + err.message });
+  }
+});
+
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 const PORT = process.env.PORT || 3456;
