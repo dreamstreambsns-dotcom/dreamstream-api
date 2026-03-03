@@ -896,7 +896,8 @@ app.post('/api/generate-reel', async (req, res) => {
     if (!auth) return res.status(401).json({ error: 'Unauthorized' });
     const { user, supabase } = auth;
 
-    const { dreamId, dreamText, style } = req.body;
+    const { dreamId, dreamText, style, frameCount: rawFrameCount } = req.body;
+    const frameCount = Math.max(2, Math.min(5, parseInt(rawFrameCount) || 3));
     if (!dreamId || !dreamText?.trim()) {
       return res.status(400).json({ error: 'dreamId and dreamText are required' });
     }
@@ -918,14 +919,14 @@ app.post('/api/generate-reel', async (req, res) => {
       messages: [
         {
           role: 'system',
-          content: `You are a dream cinematographer. Given a dream description, create exactly 3 visual prompts for key frames of a short dream film:
-1. OPENING — the establishing shot, setting the scene
-2. CLIMAX — the most intense/surreal moment of the dream
-3. ENDING — the resolution or fade-out moment
+          content: `You are a dream cinematographer. Given a dream description, create exactly ${frameCount} visual prompts for key frames of a short dream film.
+${frameCount === 2 ? 'Frame 1: OPENING — establishing shot. Frame 2: CLIMAX/ENDING — the peak moment.' :
+  frameCount === 3 ? 'Frame 1: OPENING — establishing shot. Frame 2: CLIMAX — most intense moment. Frame 3: ENDING — resolution.' :
+  `Frames should progress through the dream narrative: opening → rising action → climax → falling action → ending.`}
 
-Each prompt should be a detailed visual description (2-3 sentences) suitable for AI image generation.
+Each prompt should be a detailed visual description (2-3 sentences) suitable for AI image generation. Maintain consistent style and visual continuity across frames.
 Style: ${style || 'surrealist, cinematic, dreamlike'}.
-Return ONLY a JSON array of 3 strings, no other text.`
+Return ONLY a JSON array of ${frameCount} strings, no other text.`
         },
         { role: 'user', content: dreamText.substring(0, 1000) }
       ],
